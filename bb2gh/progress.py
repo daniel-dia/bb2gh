@@ -1,8 +1,10 @@
 from bb2gh.console import console
+from rich.console import Console
 from rich.text import Text
 
 _active_status = None
 _active_label = ""
+_status_console = Console()
 
 
 def _truncate_label(label: str, max_len: int = 72) -> str:
@@ -22,7 +24,8 @@ def log_copy_start(label: str):
     global _active_status, _active_label
     _active_label = _truncate_label(label)
     _stop_active_status()
-    _active_status = console.status(_active_label, spinner="dots")
+    # Keep spinner in terminal, but avoid recording animation frames in exported logs.
+    _active_status = _status_console.status(_active_label, spinner="dots")
     _active_status.start()
 
 

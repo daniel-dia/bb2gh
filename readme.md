@@ -11,6 +11,7 @@ Script Python para migrar repositórios de um workspace do Bitbucket para o GitH
 - Modo dry-run para ver o que seria feito sem executar
 - Detecta repos que já existem no GitHub e pula (ou força com `--force`)
 - Preserva **todos os branches, tags e histórico** (mirror push)
+- Salva um log/sumário da execução em arquivo (`logs/bb2gh_YYYYMMDD_HHMMSS.log`)
 
 ---
 
@@ -162,6 +163,12 @@ python migrate.py --repos meu-repo --force
 python migrate.py --only-private --pattern "api-*" --public --dry-run
 ```
 
+### Definir caminho customizado para o log
+
+```bash
+python migrate.py --dry-run --log-file ./logs/minha-execucao.log
+```
+
 ---
 
 ## Referência de opções
@@ -183,6 +190,7 @@ python migrate.py --help
 | `--dry-run` | `-n` | Simular sem executar |
 | `--force` | `-f` | Forçar push mesmo se já existir |
 | `--list` | `-l` | Apenas listar repos e sair |
+| `--log-file` | | Caminho do arquivo de log/sumário |
 
 ---
 

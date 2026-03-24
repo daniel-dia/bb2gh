@@ -4,6 +4,7 @@ import shutil
 import signal
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,7 +14,7 @@ from rich.table import Table
 
 from bb2gh.bb_api import consume_bb_pipeline_scope_warning, list_bb_repos
 from bb2gh.cli import filter_repos, parse_args
-from bb2gh.console import console
+from bb2gh.console import console, save_console_log
 from bb2gh.env import env, env_required
 from bb2gh.gh_api import create_gh_repo, list_gh_repos
 from bb2gh.plan import run_plan
@@ -55,6 +56,17 @@ def main():
     signal.signal(signal.SIGTERM, _handle_shutdown)
 
     args = parse_args()
+    default_log_path = Path("logs") / f"bb2gh_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_path = Path(args.log_file) if args.log_file else default_log_path
+
+    try:
+        _main_impl(args)
+    finally:
+        save_console_log(log_path)
+        console.print(f"\n📝 Log saved to: {log_path}")
+
+
+def _main_impl(args):
 
     if shutil.which("git") is None:
         console.print("ERROR: 'git' not found in PATH.")
