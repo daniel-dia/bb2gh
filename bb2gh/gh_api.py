@@ -7,6 +7,14 @@ from bb2gh.env import env
 GH_API = "https://api.github.com"
 
 
+def _next_link_url(resp: requests.Response) -> str | None:
+    links = resp.headers.get("Link", "")
+    for part in links.split(","):
+        if 'rel="next"' in part:
+            return part.split("<")[1].split(">", 1)[0]
+    return None
+
+
 def gh_repo_exists(name: str, gh_headers: dict) -> bool:
     resp = requests.get(f"{GH_API}/repos/{env('GH_ORG')}/{name}", headers=gh_headers, timeout=15)
     return resp.status_code == 200
@@ -63,30 +71,45 @@ def create_gh_repo(name: str, description: str, private: bool, gh_headers: dict)
 
 def gh_get_secrets(gh_org: str, name: str, gh_headers: dict) -> list[str]:
     try:
-        resp = requests.get(f"{GH_API}/repos/{gh_org}/{name}/actions/secrets", headers=gh_headers, timeout=15)
-        if resp.status_code != 200:
-            return []
-        return [s["name"] for s in resp.json().get("secrets", [])]
+        secrets: list[str] = []
+        url = f"{GH_API}/repos/{gh_org}/{name}/actions/secrets?per_page=100"
+        while url:
+            resp = requests.get(url, headers=gh_headers, timeout=15)
+            if resp.status_code != 200:
+                return []
+            secrets.extend(s["name"] for s in resp.json().get("secrets", []))
+            url = _next_link_url(resp)
+        return secrets
     except requests.RequestException:
         return []
 
 
 def gh_get_variables(gh_org: str, name: str, gh_headers: dict) -> list[dict]:
     try:
-        resp = requests.get(f"{GH_API}/repos/{gh_org}/{name}/actions/variables", headers=gh_headers, timeout=15)
-        if resp.status_code != 200:
-            return []
-        return [{"name": v["name"], "value": v["value"]} for v in resp.json().get("variables", [])]
+        variables: list[dict] = []
+        url = f"{GH_API}/repos/{gh_org}/{name}/actions/variables?per_page=100"
+        while url:
+            resp = requests.get(url, headers=gh_headers, timeout=15)
+            if resp.status_code != 200:
+                return []
+            variables.extend({"name": v["name"], "value": v["value"]} for v in resp.json().get("variables", []))
+            url = _next_link_url(resp)
+        return variables
     except requests.RequestException:
         return []
 
 
 def gh_get_environments(gh_org: str, name: str, gh_headers: dict) -> list[str]:
     try:
-        resp = requests.get(f"{GH_API}/repos/{gh_org}/{name}/environments", headers=gh_headers, timeout=15)
-        if resp.status_code != 200:
-            return []
-        return [e["name"] for e in resp.json().get("environments", [])]
+        environments: list[str] = []
+        url = f"{GH_API}/repos/{gh_org}/{name}/environments?per_page=100"
+        while url:
+            resp = requests.get(url, headers=gh_headers, timeout=15)
+            if resp.status_code != 200:
+                return []
+            environments.extend(e["name"] for e in resp.json().get("environments", []))
+            url = _next_link_url(resp)
+        return environments
     except requests.RequestException:
         return []
 
@@ -103,28 +126,31 @@ def gh_get_deploy_keys(gh_org: str, name: str, gh_headers: dict) -> list[dict]:
 
 def gh_get_environment_variables(gh_org: str, repo: str, env_name: str, gh_headers: dict) -> dict[str, str]:
     try:
-        resp = requests.get(
-            f"{GH_API}/repos/{gh_org}/{repo}/environments/{env_name}/variables",
-            headers=gh_headers,
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            return {}
-        return {v.get("name", ""): v.get("value", "") for v in resp.json().get("variables", [])}
+        variables: dict[str, str] = {}
+        url = f"{GH_API}/repos/{gh_org}/{repo}/environments/{env_name}/variables?per_page=100"
+        while url:
+            resp = requests.get(url, headers=gh_headers, timeout=15)
+            if resp.status_code != 200:
+                return {}
+            for v in resp.json().get("variables", []):
+                variables[v.get("name", "")] = v.get("value", "")
+            url = _next_link_url(resp)
+        return variables
     except requests.RequestException:
         return {}
 
 
 def gh_get_environment_secrets(gh_org: str, repo: str, env_name: str, gh_headers: dict) -> set[str]:
     try:
-        resp = requests.get(
-            f"{GH_API}/repos/{gh_org}/{repo}/environments/{env_name}/secrets",
-            headers=gh_headers,
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            return set()
-        return {s.get("name", "") for s in resp.json().get("secrets", [])}
+        secrets: set[str] = set()
+        url = f"{GH_API}/repos/{gh_org}/{repo}/environments/{env_name}/secrets?per_page=100"
+        while url:
+            resp = requests.get(url, headers=gh_headers, timeout=15)
+            if resp.status_code != 200:
+                return set()
+            secrets.update(s.get("name", "") for s in resp.json().get("secrets", []))
+            url = _next_link_url(resp)
+        return secrets
     except requests.RequestException:
         return set()
 

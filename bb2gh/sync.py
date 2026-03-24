@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from bb2gh.bb_api import (
     bb_get_deploy_keys,
@@ -24,6 +25,17 @@ from bb2gh.gh_api import (
 from bb2gh.progress import log_copy_done, log_copy_fail, log_copy_start
 
 
+def _with_basic_auth(url: str, username: str, password: str) -> str:
+    parsed = urlsplit(url)
+    host = parsed.hostname or parsed.netloc.split("@")[-1]
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    user = quote(username, safe="")
+    pwd = quote(password, safe="")
+    netloc = f"{user}:{pwd}@{host}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
 def mirror_repo(
     bb_clone_url: str,
     repo_slug: str,
@@ -35,8 +47,9 @@ def mirror_repo(
     gh_org: str,
 ) -> tuple[bool, str]:
     local_path = work_dir / f"{repo_slug}.git"
-    bb_authed = bb_clone_url.replace("https://", f"https://x-token-auth:{bb_api_token}@")
-    gh_url = f"https://{gh_token}@github.com/{gh_org}/{gh_name}.git"
+    bb_authed = _with_basic_auth(bb_clone_url, bb_username, bb_api_token)
+    gh_remote = f"https://github.com/{gh_org}/{gh_name}.git"
+    gh_url = _with_basic_auth(gh_remote, "x-access-token", gh_token)
 
     clone_label = f"Clone bare {repo_slug}"
     log_copy_start(clone_label)
@@ -73,6 +86,7 @@ def sync_repo_config_bb_to_gh(
         "env_vars_created": 0,
         "manual_tasks": [],
         "errors": 0,
+        "error_details": [],
     }
     max_write_workers = 6
 
@@ -121,10 +135,19 @@ def sync_repo_config_bb_to_gh(
                 for key, value in repo_var_writes
             }
             for future in as_completed(futures):
-                if future.result():
+                key = futures[future]
+                try:
+                    ok = future.result()
+                except Exception as exc:
+                    ok = False
+                    stats["error_details"].append(f"repo var '{key}': exception: {exc}")
+
+                if ok:
                     stats["repo_vars_created"] += 1
                 else:
                     stats["errors"] += 1
+                    if not any(detail.startswith(f"repo var '{key}':") for detail in stats["error_details"]):
+                        stats["error_details"].append(f"repo var '{key}': API request failed")
 
     for e in bb_envs:
         env_name = e["name"]
@@ -137,6 +160,7 @@ def sync_repo_config_bb_to_gh(
                 log_copy_done(env_label)
             else:
                 stats["errors"] += 1
+                stats["error_details"].append(f"environment '{env_name}': failed to create/ensure")
                 log_copy_fail(env_label)
                 continue
 
@@ -170,10 +194,26 @@ def sync_repo_config_bb_to_gh(
                     for key, value in env_var_writes
                 }
                 for future in as_completed(futures):
-                    if future.result():
+                    key = futures[future]
+                    try:
+                        ok = future.result()
+                    except Exception as exc:
+                        ok = False
+                        stats["error_details"].append(
+                            f"environment var '{env_name}:{key}': exception: {exc}"
+                        )
+
+                    if ok:
                         stats["env_vars_created"] += 1
                     else:
                         stats["errors"] += 1
+                        if not any(
+                            detail.startswith(f"environment var '{env_name}:{key}':")
+                            for detail in stats["error_details"]
+                        ):
+                            stats["error_details"].append(
+                                f"environment var '{env_name}:{key}': API request failed"
+                            )
 
     for k in bb_keys:
         stats["manual_tasks"].append(

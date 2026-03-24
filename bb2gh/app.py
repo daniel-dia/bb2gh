@@ -200,6 +200,8 @@ def main():
 
         if sync_stats["errors"] > 0:
             console.print(f"❌ Errors while syncing config: {sync_stats['errors']}")
+            for detail in sync_stats.get("error_details", []):
+                console.print(f"[status.fail]      - {detail}[/status.fail]")
             failed += 1
             console.print()
             continue

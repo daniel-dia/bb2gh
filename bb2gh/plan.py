@@ -196,6 +196,22 @@ def run_plan(
             bb_env_by_name = {e["name"]: e for e in bb_envs}
             shared_envs = sorted(bb_env_names & gh_env_names)
             env_var_diff_rows: list[tuple[str, str, str, str]] = []
+
+            # If the environment does not exist on GH yet, list all BB env vars as pending copy.
+            for env_name in envs_only_bb:
+                bb_env = bb_env_by_name.get(env_name)
+                if not bb_env:
+                    continue
+                bb_env_items = detail.get("bb_env_vars", {}).get(bb_env["uuid"], [])
+                for ev in bb_env_items:
+                    key = ev["key"]
+                    if ev.get("secured"):
+                        env_var_diff_rows.append(
+                            (env_name, f"{key} [sensitive]", "only in BB", "[yellow]action required[/yellow]")
+                        )
+                    else:
+                        env_var_diff_rows.append((env_name, key, "only in BB", "copy to GH"))
+
             for env_name in shared_envs:
                 bb_env = bb_env_by_name.get(env_name)
                 if not bb_env:
