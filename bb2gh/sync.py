@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from bb2gh.bb_api import (
@@ -73,20 +74,37 @@ def sync_repo_config_bb_to_gh(
         "manual_tasks": [],
         "errors": 0,
     }
+    max_write_workers = 6
 
-    bb_vars = bb_get_pipeline_variables(bb_email, bb_api_token, bb_workspace, bb_slug)
-    bb_envs = bb_get_environments(bb_email, bb_api_token, bb_workspace, bb_slug)
-    bb_keys = bb_get_deploy_keys(bb_email, bb_api_token, bb_workspace, bb_slug)
-    bb_env_vars = {
-        e["uuid"]: bb_get_env_variables(bb_email, bb_api_token, bb_workspace, bb_slug, e["uuid"])
-        for e in bb_envs
-    }
+    # Light parallelism for remote reads only.
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        f_bb_vars = executor.submit(bb_get_pipeline_variables, bb_email, bb_api_token, bb_workspace, bb_slug)
+        f_bb_envs = executor.submit(bb_get_environments, bb_email, bb_api_token, bb_workspace, bb_slug)
+        f_bb_keys = executor.submit(bb_get_deploy_keys, bb_email, bb_api_token, bb_workspace, bb_slug)
+        f_gh_secrets = executor.submit(gh_get_secrets, gh_org, gh_repo, gh_headers)
+        f_gh_vars = executor.submit(gh_get_variables, gh_org, gh_repo, gh_headers)
+        f_gh_envs = executor.submit(gh_get_environments, gh_org, gh_repo, gh_headers)
 
-    gh_secrets = gh_get_secrets(gh_org, gh_repo, gh_headers)
-    gh_vars = gh_get_variables(gh_org, gh_repo, gh_headers)
-    gh_envs = set(gh_get_environments(gh_org, gh_repo, gh_headers))
+        bb_vars = f_bb_vars.result()
+        bb_envs = f_bb_envs.result()
+        bb_keys = f_bb_keys.result()
+        gh_secrets = f_gh_secrets.result()
+        gh_vars = f_gh_vars.result()
+        gh_envs = set(f_gh_envs.result())
+
+    bb_env_vars: dict[str, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        env_futures = {
+            executor.submit(bb_get_env_variables, bb_email, bb_api_token, bb_workspace, bb_slug, e["uuid"]): e["uuid"]
+            for e in bb_envs
+        }
+        for future in as_completed(env_futures):
+            env_uuid = env_futures[future]
+            bb_env_vars[env_uuid] = future.result()
+
     gh_all_keys = set(gh_secrets) | {v["name"] for v in gh_vars}
 
+    repo_var_writes: list[tuple[str, str]] = []
     for v in bb_vars:
         key = v["key"]
         if key in gh_all_keys:
@@ -94,14 +112,19 @@ def sync_repo_config_bb_to_gh(
         if v.get("secured"):
             stats["manual_tasks"].append(f"{gh_org}/{gh_repo}: create repository secret '{key}' manually")
             continue
-        label = f"Repo var {gh_repo}:{key}"
-        log_copy_start(label)
-        if gh_set_repo_variable(gh_org, gh_repo, key, v.get("value", ""), gh_headers):
-            stats["repo_vars_created"] += 1
-            log_copy_done(label)
-        else:
-            stats["errors"] += 1
-            log_copy_fail(label)
+        repo_var_writes.append((key, v.get("value", "")))
+
+    if repo_var_writes:
+        with ThreadPoolExecutor(max_workers=max_write_workers) as executor:
+            futures = {
+                executor.submit(gh_set_repo_variable, gh_org, gh_repo, key, value, gh_headers): key
+                for key, value in repo_var_writes
+            }
+            for future in as_completed(futures):
+                if future.result():
+                    stats["repo_vars_created"] += 1
+                else:
+                    stats["errors"] += 1
 
     for e in bb_envs:
         env_name = e["name"]
@@ -117,9 +140,13 @@ def sync_repo_config_bb_to_gh(
                 log_copy_fail(env_label)
                 continue
 
-        gh_env_vars = gh_get_environment_variables(gh_org, gh_repo, env_name, gh_headers)
-        gh_env_secrets = gh_get_environment_secrets(gh_org, gh_repo, env_name, gh_headers)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            f_gh_env_vars = executor.submit(gh_get_environment_variables, gh_org, gh_repo, env_name, gh_headers)
+            f_gh_env_secrets = executor.submit(gh_get_environment_secrets, gh_org, gh_repo, env_name, gh_headers)
+            gh_env_vars = f_gh_env_vars.result()
+            gh_env_secrets = f_gh_env_secrets.result()
 
+        env_var_writes: list[tuple[str, str]] = []
         for ev in bb_env_vars.get(e["uuid"], []):
             key = ev["key"]
             if ev.get("secured"):
@@ -132,15 +159,21 @@ def sync_repo_config_bb_to_gh(
 
             if key in gh_env_vars and gh_env_vars.get(key) == ev.get("value", ""):
                 continue
+            env_var_writes.append((key, ev.get("value", "")))
 
-            ev_label = f"Env var {gh_repo}:{env_name}:{key}"
-            log_copy_start(ev_label)
-            if gh_set_environment_variable(gh_org, gh_repo, env_name, key, ev.get("value", ""), gh_headers):
-                stats["env_vars_created"] += 1
-                log_copy_done(ev_label)
-            else:
-                stats["errors"] += 1
-                log_copy_fail(ev_label)
+        if env_var_writes:
+            with ThreadPoolExecutor(max_workers=max_write_workers) as executor:
+                futures = {
+                    executor.submit(
+                        gh_set_environment_variable, gh_org, gh_repo, env_name, key, value, gh_headers
+                    ): key
+                    for key, value in env_var_writes
+                }
+                for future in as_completed(futures):
+                    if future.result():
+                        stats["env_vars_created"] += 1
+                    else:
+                        stats["errors"] += 1
 
     for k in bb_keys:
         stats["manual_tasks"].append(

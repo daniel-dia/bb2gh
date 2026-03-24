@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 from rich.panel import Panel
@@ -27,6 +28,17 @@ from bb2gh.console import console
 from bb2gh.progress import log_copy_done, log_copy_start
 
 
+def _render_key_with_badge(key: str) -> Text:
+    badge_suffix = " [sensitive]"
+    if key.endswith(badge_suffix):
+        base_key = key[: -len(badge_suffix)]
+        text = Text(base_key)
+        text.append(" ")
+        text.append("SENSITIVE", style="bold black on yellow")
+        return text
+    return Text(key)
+
+
 def run_plan(
     repos: list[dict],
     args: argparse.Namespace,
@@ -40,6 +52,8 @@ def run_plan(
 ):
     if is_shutdown_requested is None:
         is_shutdown_requested = lambda: False
+
+    max_workers = 4
 
     console.print(Panel.fit("[bold]PLAN - Bitbucket <-> GitHub Comparison[/bold]", border_style="cyan"))
     console.print()
@@ -92,11 +106,13 @@ def run_plan(
         slugs = [r["slug"] for r, _ in only_bb]
         collect_bb_label = f"Collecting BB details ({len(slugs)} repos)"
         log_copy_start(collect_bb_label)
-        for s in slugs:
-            if is_shutdown_requested():
-                break
-            slug, data = _fetch_bb_details(s)
-            bb_extra[slug] = data
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_fetch_bb_details, s): s for s in slugs if not is_shutdown_requested()}
+            for fut in as_completed(futures):
+                if is_shutdown_requested():
+                    break
+                slug, data = fut.result()
+                bb_extra[slug] = data
         log_copy_done(collect_bb_label)
 
     if only_bb:
@@ -125,24 +141,37 @@ def run_plan(
         console.print(Rule(f"IN BOTH (BB <-> GH) - {len(both)} repo(s)", style="yellow"))
         compare_label = f"Comparing repos ({len(both)})"
         log_copy_start(compare_label)
-        for repo, gh_name, _ in both:
-            if is_shutdown_requested():
-                break
-            slug = repo["slug"]
+        def _fetch_both_repo_detail(repo_item: dict, gh_repo_name: str) -> tuple[str, dict]:
+            slug = repo_item["slug"]
             bb_vars = bb_get_pipeline_variables(bb_email, bb_api_token, bb_workspace, slug)
             bb_envs = bb_get_environments(bb_email, bb_api_token, bb_workspace, slug)
             bb_keys = bb_get_deploy_keys(bb_email, bb_api_token, bb_workspace, slug)
-            bb_env_vars = {e["uuid"]: bb_get_env_variables(bb_email, bb_api_token, bb_workspace, slug, e["uuid"]) for e in bb_envs}
-            both_details[slug] = {
+            bb_env_vars = {
+                e["uuid"]: bb_get_env_variables(bb_email, bb_api_token, bb_workspace, slug, e["uuid"]) for e in bb_envs
+            }
+            detail = {
                 "bb_vars": bb_vars,
                 "bb_envs": bb_envs,
                 "bb_keys": bb_keys,
                 "bb_env_vars": bb_env_vars,
-                "gh_secrets": gh_get_secrets(gh_org, gh_name, gh_headers),
-                "gh_vars": gh_get_variables(gh_org, gh_name, gh_headers),
-                "gh_envs": gh_get_environments(gh_org, gh_name, gh_headers),
-                "gh_keys": gh_get_deploy_keys(gh_org, gh_name, gh_headers),
+                "gh_secrets": gh_get_secrets(gh_org, gh_repo_name, gh_headers),
+                "gh_vars": gh_get_variables(gh_org, gh_repo_name, gh_headers),
+                "gh_envs": gh_get_environments(gh_org, gh_repo_name, gh_headers),
+                "gh_keys": gh_get_deploy_keys(gh_org, gh_repo_name, gh_headers),
             }
+            return slug, detail
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_fetch_both_repo_detail, repo, gh_name): repo["slug"]
+                for repo, gh_name, _ in both
+                if not is_shutdown_requested()
+            }
+            for fut in as_completed(futures):
+                if is_shutdown_requested():
+                    break
+                slug, detail = fut.result()
+                both_details[slug] = detail
         log_copy_done(compare_label)
 
         for repo, gh_name, gh_info in both:
@@ -235,7 +264,7 @@ def run_plan(
                 repo_var_table.add_column("Difference", style="yellow")
                 repo_var_table.add_column("Action", style="bold")
                 for key, diff, action in repo_var_diff_rows:
-                    repo_var_table.add_row(Text(key), diff, action)
+                    repo_var_table.add_row(_render_key_with_badge(key), diff, action)
                 console.print(repo_var_table)
 
             if env_presence_diff_rows:
@@ -254,7 +283,7 @@ def run_plan(
                 env_vars_table.add_column("Difference", style="yellow")
                 env_vars_table.add_column("Action", style="bold")
                 for env_name, key, diff, action in env_var_diff_rows:
-                    env_vars_table.add_row(env_name, Text(key), diff, action)
+                    env_vars_table.add_row(env_name, _render_key_with_badge(key), diff, action)
                 console.print(env_vars_table)
 
     console.print(Panel.fit("[bold]PLAN SUMMARY[/bold]", border_style="green"))
