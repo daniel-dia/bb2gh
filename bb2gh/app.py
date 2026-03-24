@@ -9,13 +9,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.table import Table
 
-from bb2gh.bb_api import list_bb_repos
+from bb2gh.bb_api import consume_bb_pipeline_scope_warning, list_bb_repos
 from bb2gh.cli import filter_repos, parse_args
 from bb2gh.console import console
 from bb2gh.env import env, env_required
 from bb2gh.gh_api import create_gh_repo, list_gh_repos
 from bb2gh.plan import run_plan
+from bb2gh.progress import log_copy_done, log_copy_start
 from bb2gh.sync import mirror_repo, sync_repo_config_bb_to_gh
 
 load_dotenv()
@@ -33,12 +35,19 @@ def _handle_shutdown(signum, frame):
     global _shutdown_requested
     sig_name = signal.Signals(signum).name
     if _shutdown_requested:
-        print("\n\n  ✗ Forçando saída...")
+        console.print("\n\n  ✗ Forcing exit...")
         _cleanup()
         sys.exit(1)
     _shutdown_requested = True
-    print(f"\n\n  ❌ {sig_name} recebido. Finalizando gracefully...")
-    print(" (pressione Ctrl+C novamente para forçar)")
+    console.print(f"\n\n  ❌ {sig_name} received. Shutting down gracefully...")
+    console.print(" (press Ctrl+C again to force)")
+
+
+def _print_bb_pipeline_scope_warning_if_needed():
+    if consume_bb_pipeline_scope_warning():
+        console.print("\n  ❌ 403 - BB token missing permission 'read:pipeline:bitbucket'.")
+        console.print("   Pipeline vars/environments will not be listed.")
+        console.print("   Add 'Pipelines: Read' scope to the token.\n")
 
 
 def main():
@@ -48,14 +57,18 @@ def main():
     args = parse_args()
 
     if shutil.which("git") is None:
-        print("ERRO: 'git' não encontrado no PATH.")
+        console.print("ERROR: 'git' not found in PATH.")
         sys.exit(1)
 
-    bb_username = env_required("BB_USERNAME")
-    bb_email = env_required("BB_EMAIL")
-    bb_api_token = env_required("BB_API_TOKEN")
-    gh_token = env_required("GH_TOKEN")
-    gh_org = env_required("GH_ORG")
+    try:
+        bb_username = env_required("BB_USERNAME")
+        bb_email = env_required("BB_EMAIL")
+        bb_api_token = env_required("BB_API_TOKEN")
+        gh_token = env_required("GH_TOKEN")
+        gh_org = env_required("GH_ORG")
+    except ValueError as exc:
+        console.print(str(exc))
+        sys.exit(1)
     bb_workspace = env("BB_WORKSPACE", bb_username) or bb_username
 
     private = not args.public
@@ -65,36 +78,38 @@ def main():
     }
 
     if args.gh_name and args.repos and "," in args.repos:
-        print("ERRO: --gh-name só pode ser usado com um único repo em --repos.")
+        console.print("ERROR: --gh-name can only be used with a single repo in --repos.")
         sys.exit(1)
 
     console.print(Panel.fit("[bold]Bitbucket -> GitHub Migration[/bold]", border_style="cyan"))
     console.print(f" Bitbucket workspace : {bb_workspace}")
-    console.print(f" GitHub destino      : {gh_org}")
-    console.print(f" Repos privados      : {private}")
+    console.print(f" GitHub target       : {gh_org}")
+    console.print(f" Private repos       : {private}")
     console.print(f" Dry run             : {args.dry_run}")
     if args.repos:
-        console.print(f" Repos selecionados  : {args.repos}")
+        console.print(f" Selected repos      : {args.repos}")
     if args.exclude:
-        console.print(f" Repos excluídos     : {args.exclude}")
+        console.print(f" Excluded repos      : {args.exclude}")
     if args.pattern:
         console.print(f" Pattern             : {args.pattern}")
     if args.gh_prefix:
-        console.print(f" Prefixo GitHub      : {args.gh_prefix}")
+        console.print(f" GitHub prefix       : {args.gh_prefix}")
     if args.force:
-        console.print(" Forçar re-migração  : sim")
+        console.print(" Force re-migration  : yes")
     console.print()
 
-    console.print(f"Buscando repositórios do Bitbucket (workspace: {bb_workspace})...")
+    fetch_bb_label = f"Fetching Bitbucket repositories ({bb_workspace})"
+    log_copy_start(fetch_bb_label)
     all_repos = list_bb_repos(bb_email, bb_api_token, bb_workspace)
-    console.print(f"Encontrados {len(all_repos)} repositório(s) no Bitbucket.\n")
+    log_copy_done(fetch_bb_label)
+    console.print(f"Found {len(all_repos)} repository(ies) on Bitbucket.\n")
 
     if not all_repos:
-        print("Nenhum repositório encontrado. Verifique credenciais e workspace.")
+        console.print("No repositories found. Check credentials and workspace.")
         return
 
     repos = filter_repos(all_repos, args)
-    console.print(f"Após filtros: {len(repos)} repositório(s) selecionado(s).\n")
+    console.print(f"After filters: {len(repos)} repository(ies) selected.\n")
     console.print()
 
     if args.list:
@@ -113,16 +128,19 @@ def main():
             is_shutdown_requested=lambda: _shutdown_requested,
         )
         if args.dry_run:
-            print("DRY RUN — nenhuma ação foi executada.\n")
+            console.print("DRY RUN - no action was executed.\n")
+        _print_bb_pipeline_scope_warning_if_needed()
         return
 
     if not repos:
-        print("Nenhum repositório corresponde aos filtros. Nada a fazer.")
+        console.print("No repositories match the filters. Nothing to do.")
         return
 
-    console.print("  Carregando repos do GitHub...")
+    load_gh_label = "Loading GitHub repositories"
+    log_copy_start(load_gh_label)
     gh_repos_map = list_gh_repos(gh_org, gh_headers)
-    console.print(f"GitHub: {len(gh_repos_map)} repo(s) acessíveis.\n")
+    log_copy_done(load_gh_label)
+    console.print(f"GitHub: {len(gh_repos_map)} accessible repo(s).\n")
 
     work_dir = Path(tempfile.mkdtemp(prefix="bb2gh_"))
     global _current_work_dir
@@ -133,39 +151,46 @@ def main():
 
     for repo in repos:
         if _shutdown_requested:
-            print("\n  ❌ Interrompido pelo usuário. Parando migração...")
+            console.print("\n  ❌ Interrupted by user. Stopping migration...")
             break
 
         slug = repo["slug"]
         gh_name = args.gh_name if args.gh_name else f"{args.gh_prefix}{slug}"
 
-        console.print(Rule(f"Migrando: {slug} -> {gh_org}/{gh_name}", style="cyan"))
+        console.print(Rule(f"MIGRATING: {slug} -> {gh_org}/{gh_name}", style="cyan"))
 
         exists = gh_name.lower() in gh_repos_map
         if exists:
-            console.print("Repo já existe no GitHub.")
+            console.print("Repository already exists on GitHub.")
 
         if not exists:
-            if not create_gh_repo(gh_name, repo["description"], private, gh_headers):
+            created, create_error = create_gh_repo(gh_name, repo["description"], private, gh_headers)
+            if not created:
+                console.print(f"❌ Failed to create repository: {create_error}")
                 failed += 1
                 continue
+            console.print(f"✓ Repository created on GitHub: {gh_org}/{gh_name}")
             gh_repos_map[gh_name.lower()] = {"name": gh_name}
 
         did_mirror = False
         if not exists or args.force:
             if not repo["clone_url"]:
-                console.print("❌ URL de clone não encontrada no Bitbucket. Pulando...")
+                console.print("❌ Clone URL not found in Bitbucket. Skipping...")
                 failed += 1
                 continue
 
-            if mirror_repo(repo["clone_url"], slug, gh_name, work_dir, bb_username, bb_api_token, gh_token, gh_org):
-                console.print("✓ Mirror de código concluído.")
+            mirrored, mirror_error = mirror_repo(
+                repo["clone_url"], slug, gh_name, work_dir, bb_username, bb_api_token, gh_token, gh_org
+            )
+            if mirrored:
+                console.print("✓ Code mirror completed.")
                 did_mirror = True
             else:
+                console.print(f"❌ {mirror_error}")
                 failed += 1
                 continue
         else:
-            console.print("➡️  Repo existente: não sobrescrevendo código (use --force para mirror).")
+            console.print("➡️   Existing repository: not overwriting code (use --force for mirror).")
 
         sync_stats = sync_repo_config_bb_to_gh(bb_email, bb_api_token, bb_workspace, slug, gh_org, gh_name, gh_headers)
         manual_tasks_all.extend(sync_stats["manual_tasks"])
@@ -174,23 +199,33 @@ def main():
         has_manual = len(sync_stats["manual_tasks"]) > 0
 
         if sync_stats["errors"] > 0:
-            console.print(f"❌ Erros ao sincronizar config: {sync_stats['errors']}")
+            console.print(f"❌ Errors while syncing config: {sync_stats['errors']}")
             failed += 1
             console.print()
             continue
 
         if exists and not args.force and not did_mirror and changes_applied == 0 and not has_manual:
-            console.print("✅ Já estava sincronizado. Nada para copiar.")
+            console.print("✅ Already synchronized. Nothing to copy.")
             skipped += 1
             console.print()
             continue
 
-        console.print(
-            f"Config aplicada: vars={sync_stats['repo_vars_created']}, "
-            f"envs={sync_stats['envs_created']}, env_vars={sync_stats['env_vars_created']}"
-        )
+        repo_summary = Table(show_header=False, box=None, pad_edge=False)
+        repo_summary.add_column("label", style="bold")
+        repo_summary.add_column("value")
+        repo_summary.add_row("Repo vars copied", str(sync_stats["repo_vars_created"]))
+        repo_summary.add_row("Environments created", str(sync_stats["envs_created"]))
+        repo_summary.add_row("Environment vars copied", str(sync_stats["env_vars_created"]))
+        repo_summary.add_row("Manual actions required", str(len(sync_stats["manual_tasks"])))
+        console.print(repo_summary)
+
         if has_manual:
-            console.print(f"🔒 Tarefas manuais neste repo: {len(sync_stats['manual_tasks'])}")
+            manual_table = Table(title="Manual actions", box=None, pad_edge=False)
+            manual_table.add_column("Item", style="yellow")
+            manual_table.add_column("Action", style="bold")
+            for task in sync_stats["manual_tasks"]:
+                manual_table.add_row(task, "manual action required")
+            console.print(manual_table)
 
         success += 1
         console.print()
@@ -199,15 +234,17 @@ def main():
     _current_work_dir = None
 
     console.print()
-    console.print(Panel.fit("[bold]Resumo da migração[/bold]", border_style="green"))
-    console.print(f"Sucesso : {success}")
-    console.print(f"Pulados : {skipped} (já estavam sincronizados)")
-    console.print(f"Falhas  : {failed}")
+    console.print(Panel.fit("[bold]Migration Summary[/bold]", border_style="green"))
+    console.print(f"Success : {success}")
+    console.print(f"Skipped : {skipped} (already synchronized)")
+    console.print(f"Failed  : {failed}")
     console.print(f"Total   : {len(repos)}")
 
     if manual_tasks_all:
         console.print()
-        console.print(Panel.fit("[bold yellow]ALERTA - tarefas manuais necessárias[/bold yellow]", border_style="yellow"))
+        console.print(Panel.fit("[bold yellow]ALERT - Manual tasks required[/bold yellow]", border_style="yellow"))
         unique_tasks = list(dict.fromkeys(manual_tasks_all))
         for t in unique_tasks:
             console.print(f"🔒 {t}")
+
+    _print_bb_pipeline_scope_warning_if_needed()

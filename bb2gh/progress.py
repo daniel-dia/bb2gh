@@ -1,4 +1,5 @@
 from bb2gh.console import console
+from rich.text import Text
 
 _active_status = None
 _active_label = ""
@@ -7,7 +8,7 @@ _active_label = ""
 def _truncate_label(label: str, max_len: int = 72) -> str:
     if len(label) <= max_len:
         return label
-    return label[: max_len - 1] + "…"
+    return label[: max_len - 3] + "..."
 
 
 def _stop_active_status():
@@ -29,7 +30,9 @@ def log_copy_done(label: str):
     global _active_label
     final_label = _truncate_label(label) if label else _active_label
     _stop_active_status()
-    console.print(f"✅ {final_label}")
+    line = Text()
+    line.append(final_label, style="green")
+    console.print(line)
     _active_label = ""
 
 
@@ -37,5 +40,8 @@ def log_copy_fail(label: str):
     global _active_label
     final_label = _truncate_label(label) if label else _active_label
     _stop_active_status()
-    console.print(f"❌ {final_label}")
+    line = Text()
+    line.append("FAILED", style="bold red")
+    line.append(final_label, style="red")
+    console.print(line)
     _active_label = ""

@@ -1,5 +1,4 @@
 import os
-import sys
 
 
 def env(name: str, default: str = "") -> str:
@@ -9,6 +8,5 @@ def env(name: str, default: str = "") -> str:
 def env_required(name: str) -> str:
     value = env(name)
     if not value:
-        print(f"ERRO: variável de ambiente {name} não definida.")
-        sys.exit(1)
+        raise ValueError(f"ERROR: environment variable {name} is not set.")
     return value

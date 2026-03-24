@@ -4,43 +4,43 @@ import fnmatch
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Migra repositórios do Bitbucket para o GitHub.",
+        description="Migrate repositories from Bitbucket to GitHub.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Variáveis de ambiente obrigatórias:
-  BB_USERNAME       Username do Bitbucket
-  BB_EMAIL          Email da conta Atlassian (usado para autenticação na API)
-  BB_API_TOKEN      API Token do Bitbucket (scopes: Repositories:Read e Pipelines:Read)
-  GH_TOKEN          Personal Access Token do GitHub (scope: repo)
-  GH_ORG            Organização ou username de destino no GitHub
+Required environment variables:
+  BB_USERNAME       Bitbucket username
+  BB_EMAIL          Atlassian account email (used for API authentication)
+  BB_API_TOKEN      Bitbucket API Token (scopes: Repositories:Read and Pipelines:Read)
+  GH_TOKEN          GitHub Personal Access Token (scope: repo)
+  GH_ORG            Destination GitHub organization or username
 
-Variáveis de ambiente opcionais:
-  BB_WORKSPACE      Workspace do Bitbucket (padrão: BB_USERNAME)
+Optional environment variables:
+  BB_WORKSPACE      Bitbucket workspace (default: BB_USERNAME)
         """,
     )
 
-    sel = p.add_argument_group("seleção de repositórios")
-    sel.add_argument("--repos", "-r", help="Lista de slugs separados por vírgula para migrar (ex: repo1,repo2)")
-    sel.add_argument("--exclude", "-e", help="Lista de slugs separados por vírgula para EXCLUIR da migração")
-    sel.add_argument("--pattern", help="Glob pattern para filtrar repos pelo slug (ex: 'api-*', '*-service')")
-    sel.add_argument("--only-private", action="store_true", help="Migrar apenas repos privados do Bitbucket")
-    sel.add_argument("--only-public", action="store_true", help="Migrar apenas repos públicos do Bitbucket")
-    sel.add_argument("--project", "-p", help="Filtrar por projeto do Bitbucket (nome ou key, ex: 'Development')")
+    sel = p.add_argument_group("repository selection")
+    sel.add_argument("--repos", "-r", help="Comma-separated list of slugs to migrate (e.g. repo1,repo2)")
+    sel.add_argument("--exclude", "-e", help="Comma-separated list of slugs to EXCLUDE from migration")
+    sel.add_argument("--pattern", help="Glob pattern to filter repos by slug (e.g. 'api-*', '*-service')")
+    sel.add_argument("--only-private", action="store_true", help="Migrate only private Bitbucket repos")
+    sel.add_argument("--only-public", action="store_true", help="Migrate only public Bitbucket repos")
+    sel.add_argument("--project", "-p", help="Filter by Bitbucket project (name or key, e.g. 'Development')")
 
-    dest = p.add_argument_group("configuração de destino")
-    dest.add_argument("--public", action="store_true", help="Criar repos como PÚBLICOS no GitHub (padrão: privado)")
-    dest.add_argument("--gh-name", help="Nome customizado no GitHub (só funciona com --repos de um único repo)")
+    dest = p.add_argument_group("destination configuration")
+    dest.add_argument("--public", action="store_true", help="Create repos as PUBLIC on GitHub (default: private)")
+    dest.add_argument("--gh-name", help="Custom name on GitHub (only works with a single repo in --repos)")
     dest.add_argument(
         "--gh-prefix",
-        help="Prefixo para adicionar ao nome do repo no GitHub (ex: 'bb-' → 'bb-meu-repo')",
+        help="Prefix to add to the repo name on GitHub (e.g. 'bb-' -> 'bb-my-repo')",
         default="",
     )
 
-    behav = p.add_argument_group("comportamento")
-    behav.add_argument("--dry-run", "-n", action="store_true", help="Apenas listar repos que seriam migrados, sem executar nada")
-    behav.add_argument("--plan", action="store_true", help="Mostrar plano detalhado: comparar BB vs GH, listar vars, secrets, envs, deploy keys")
-    behav.add_argument("--force", "-f", action="store_true", help="Forçar migração mesmo se o repo já existir no GitHub (push --mirror)")
-    behav.add_argument("--list", "-l", action="store_true", help="Listar todos os repos do Bitbucket e sair")
+    behav = p.add_argument_group("behavior")
+    behav.add_argument("--dry-run", "-n", action="store_true", help="Only list repos that would be migrated, without executing")
+    behav.add_argument("--plan", action="store_true", help="Show detailed plan: compare BB vs GH, list vars, secrets, envs, deploy keys")
+    behav.add_argument("--force", "-f", action="store_true", help="Force migration even if repo already exists on GitHub (push --mirror)")
+    behav.add_argument("--list", "-l", action="store_true", help="List all Bitbucket repos and exit")
 
     return p.parse_args()
 

@@ -48,7 +48,7 @@ def list_gh_repos(gh_org: str, gh_headers: dict) -> dict[str, dict]:
     return repos
 
 
-def create_gh_repo(name: str, description: str, private: bool, gh_headers: dict) -> bool:
+def create_gh_repo(name: str, description: str, private: bool, gh_headers: dict) -> tuple[bool, str]:
     gh_org = env("GH_ORG")
     user = gh_authenticated_user(gh_headers)
     endpoint = f"{GH_API}/user/repos" if user == gh_org else f"{GH_API}/orgs/{gh_org}/repos"
@@ -56,11 +56,9 @@ def create_gh_repo(name: str, description: str, private: bool, gh_headers: dict)
     payload = {"name": name, "description": description, "private": private}
     resp = requests.post(endpoint, headers=gh_headers, json=payload, timeout=30)
     if resp.status_code in (200, 201):
-        print(f"✓ Repo criado no GitHub: {gh_org}/{name}")
-        return True
+        return True, ""
 
-    print(f"✗ Falha ao criar repo: {resp.status_code} — {resp.text[:200]}")
-    return False
+    return False, f"{resp.status_code} — {resp.text[:200]}"
 
 
 def gh_get_secrets(gh_org: str, name: str, gh_headers: dict) -> list[str]:

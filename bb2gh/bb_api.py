@@ -7,6 +7,13 @@ BB_API = "https://api.bitbucket.org/2.0"
 _bb_pipeline_scope_warned = False
 
 
+def consume_bb_pipeline_scope_warning() -> bool:
+    global _bb_pipeline_scope_warned
+    warned = _bb_pipeline_scope_warned
+    _bb_pipeline_scope_warned = False
+    return warned
+
+
 def list_bb_repos(bb_email: str, bb_api_token: str, bb_workspace: str) -> list[dict]:
     repos = []
     url = f"{BB_API}/repositories/{bb_workspace}?pagelen=100"
@@ -57,9 +64,6 @@ def bb_get_pipeline_variables(bb_email: str, bb_api_token: str, workspace: str, 
             if resp.status_code == 403:
                 if not _bb_pipeline_scope_warned:
                     _bb_pipeline_scope_warned = True
-                    print("\n  ❌ 403 — Token BB sem permissão 'read:pipeline:bitbucket'.")
-                    print("   Pipeline vars/environments não serão listados.")
-                    print("   Adicione a scope 'Pipelines: Read' ao token.\n")
                 return []
             resp.raise_for_status()
             data = resp.json()
@@ -89,9 +93,6 @@ def bb_get_environments(bb_email: str, bb_api_token: str, workspace: str, slug: 
             if resp.status_code == 403:
                 if not _bb_pipeline_scope_warned:
                     _bb_pipeline_scope_warned = True
-                    print("\n  ❌ 403 — Token BB sem permissão 'read:pipeline:bitbucket'.")
-                    print("   Pipeline vars/environments não serão listados.")
-                    print("   Adicione a scope 'Pipelines: Read' ao token.\n")
                 return []
             resp.raise_for_status()
             data = resp.json()

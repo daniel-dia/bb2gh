@@ -32,7 +32,7 @@ def mirror_repo(
     bb_api_token: str,
     gh_token: str,
     gh_org: str,
-) -> bool:
+) -> tuple[bool, str]:
     local_path = work_dir / f"{repo_slug}.git"
     bb_authed = bb_clone_url.replace("https://", f"https://x-token-auth:{bb_api_token}@")
     gh_url = f"https://{gh_token}@github.com/{gh_org}/{gh_name}.git"
@@ -42,8 +42,7 @@ def mirror_repo(
     result = subprocess.run(["git", "clone", "--bare", bb_authed, str(local_path)], capture_output=True, text=True)
     if result.returncode != 0:
         log_copy_fail(clone_label)
-        print(f"✗ Falha ao clonar: {result.stderr[:200]}")
-        return False
+        return False, f"Failed to clone: {result.stderr[:200]}"
     log_copy_done(clone_label)
 
     push_label = f"Mirror push {repo_slug}"
@@ -51,12 +50,11 @@ def mirror_repo(
     result = subprocess.run(["git", "push", "--mirror", gh_url], capture_output=True, text=True, cwd=str(local_path))
     if result.returncode != 0:
         log_copy_fail(push_label)
-        print(f"✗ Falha no push: {result.stderr[:200]}")
-        return False
+        return False, f"Push failed: {result.stderr[:200]}"
     log_copy_done(push_label)
 
     shutil.rmtree(local_path, ignore_errors=True)
-    return True
+    return True, ""
 
 
 def sync_repo_config_bb_to_gh(
@@ -94,7 +92,7 @@ def sync_repo_config_bb_to_gh(
         if key in gh_all_keys:
             continue
         if v.get("secured"):
-            stats["manual_tasks"].append(f"{gh_org}/{gh_repo}: criar secret de repo '{key}' manualmente")
+            stats["manual_tasks"].append(f"{gh_org}/{gh_repo}: create repository secret '{key}' manually")
             continue
         label = f"Repo var {gh_repo}:{key}"
         log_copy_start(label)
@@ -128,7 +126,7 @@ def sync_repo_config_bb_to_gh(
                 if key in gh_env_secrets:
                     continue
                 stats["manual_tasks"].append(
-                    f"{gh_org}/{gh_repo}: criar secret do environment '{env_name}' -> '{key}' manualmente"
+                    f"{gh_org}/{gh_repo}: create environment secret '{env_name}' -> '{key}' manually"
                 )
                 continue
 
@@ -146,7 +144,7 @@ def sync_repo_config_bb_to_gh(
 
     for k in bb_keys:
         stats["manual_tasks"].append(
-            f"{gh_org}/{gh_repo}: revisar deploy key '{k.get('label', '')}' e recriar manualmente se necessário"
+            f"{gh_org}/{gh_repo}: review deploy key '{k.get('label', '')}' and recreate it manually if needed"
         )
 
     return stats

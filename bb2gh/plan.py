@@ -6,6 +6,7 @@ from typing import Callable
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
+from rich.text import Text
 
 from bb2gh.bb_api import (
     bb_get_deploy_keys,
@@ -15,12 +16,15 @@ from bb2gh.bb_api import (
 )
 from bb2gh.gh_api import (
     gh_get_deploy_keys,
+    gh_get_environment_secrets,
+    gh_get_environment_variables,
     gh_get_environments,
     gh_get_secrets,
     gh_get_variables,
     list_gh_repos,
 )
 from bb2gh.console import console
+from bb2gh.progress import log_copy_done, log_copy_start
 
 
 def run_plan(
@@ -37,15 +41,17 @@ def run_plan(
     if is_shutdown_requested is None:
         is_shutdown_requested = lambda: False
 
-    console.print(Panel.fit("[bold]PLAN - Comparação Bitbucket <-> GitHub[/bold]", border_style="cyan"))
+    console.print(Panel.fit("[bold]PLAN - Bitbucket <-> GitHub Comparison[/bold]", border_style="cyan"))
     console.print()
 
     only_bb = []
     both = []
 
-    console.print("  Carregando repos do GitHub...", end="")
+    load_gh_label = "Loading GitHub repos"
+    log_copy_start(load_gh_label)
     gh_repos_map = list_gh_repos(gh_org, gh_headers)
-    console.print(f"\r  GitHub: {len(gh_repos_map)} repo(s) acessíveis.{' ' * 20}")
+    log_copy_done(load_gh_label)
+    console.print(f"GitHub: {len(gh_repos_map)} accessible repo(s).")
 
     for repo in repos:
         if is_shutdown_requested():
@@ -58,14 +64,14 @@ def run_plan(
         else:
             only_bb.append((repo, gh_name))
 
-    console.print(Rule("RESUMO GERAL", style="cyan"))
+    console.print(Rule("GENERAL SUMMARY", style="cyan"))
     summary_table = Table(show_header=False, box=None, pad_edge=False)
     summary_table.add_column("label", style="bold")
     summary_table.add_column("value")
     summary_table.add_row("Bitbucket (total)", str(len(repos)))
-    summary_table.add_row("GitHub (acessíveis)", str(len(gh_repos_map)))
-    summary_table.add_row("Só no Bitbucket", f"{len(only_bb)} (serão criados)")
-    summary_table.add_row("Em ambos", f"{len(both)} (já migrados)")
+    summary_table.add_row("GitHub (accessible)", str(len(gh_repos_map)))
+    summary_table.add_row("Only in Bitbucket", f"{len(only_bb)} (will be created)")
+    summary_table.add_row("In both", f"{len(both)} (already migrated)")
     console.print(summary_table)
     console.print()
 
@@ -84,46 +90,44 @@ def run_plan(
 
     if only_bb and not is_shutdown_requested():
         slugs = [r["slug"] for r, _ in only_bb]
-        done = 0
+        collect_bb_label = f"Collecting BB details ({len(slugs)} repos)"
+        log_copy_start(collect_bb_label)
         for s in slugs:
             if is_shutdown_requested():
                 break
-            done += 1
-            console.print(f"\r  Coletando detalhes BB... {done}/{len(slugs)}", end="")
             slug, data = _fetch_bb_details(s)
             bb_extra[slug] = data
-        console.print(f"\r  Detalhes BB coletados.{' ' * 30}")
+        log_copy_done(collect_bb_label)
 
     if only_bb:
-        console.print(Rule(f"SOMENTE NO BITBUCKET - {len(only_bb)} repo(s)", style="green"))
+        console.print(Rule(f"ONLY IN BITBUCKET - {len(only_bb)} repo(s)", style="green"))
         for repo, gh_name in only_bb:
             slug = repo["slug"]
             extra = bb_extra.get(slug, {})
             console.print(f"\n➡️  {slug} -> {gh_org}/{gh_name}")
-            console.print(f"Projeto: {repo.get('project_name') or '-'}")
+            console.print(f"Project: {repo.get('project_name') or '-'}")
 
             bb_vars = extra.get("vars", [])
             if bb_vars:
                 console.print(f"Pipeline Variables ({len(bb_vars)})")
                 for v in bb_vars:
-                    icon = "🔒" if v["secured"] else "➡️"
+                    icon = "🔒" if v["secured"] else "➡️ "
                     console.print(f"  {icon} {v['key']}")
 
             bb_envs = extra.get("envs", [])
             if bb_envs:
                 console.print(f"Environments ({len(bb_envs)})")
                 for e in bb_envs:
-                    console.print(f"  ➡️ {e['name']}")
+                    console.print(f"  ➡️  {e['name']}")
 
     both_details: dict[str, dict] = {}
     if both:
-        console.print(Rule(f"EM AMBOS (BB <-> GH) - {len(both)} repo(s)", style="yellow"))
-        done = 0
+        console.print(Rule(f"IN BOTH (BB <-> GH) - {len(both)} repo(s)", style="yellow"))
+        compare_label = f"Comparing repos ({len(both)})"
+        log_copy_start(compare_label)
         for repo, gh_name, _ in both:
             if is_shutdown_requested():
                 break
-            done += 1
-            console.print(f"\r  Comparando repos... {done}/{len(both)}", end="")
             slug = repo["slug"]
             bb_vars = bb_get_pipeline_variables(bb_email, bb_api_token, bb_workspace, slug)
             bb_envs = bb_get_environments(bb_email, bb_api_token, bb_workspace, slug)
@@ -139,12 +143,13 @@ def run_plan(
                 "gh_envs": gh_get_environments(gh_org, gh_name, gh_headers),
                 "gh_keys": gh_get_deploy_keys(gh_org, gh_name, gh_headers),
             }
-        console.print(f"\r  Comparação concluída.{' ' * 30}")
+        log_copy_done(compare_label)
 
         for repo, gh_name, gh_info in both:
             slug = repo["slug"]
             detail = both_details.get(slug, {})
             bb_vars = detail.get("bb_vars", [])
+            bb_var_secured = {v.get("key", ""): bool(v.get("secured")) for v in bb_vars}
             gh_secrets = detail.get("gh_secrets", [])
             gh_vars_list = detail.get("gh_vars", [])
             bb_var_keys = {v["key"] for v in bb_vars}
@@ -159,30 +164,103 @@ def run_plan(
             envs_only_bb = sorted(bb_env_names - gh_env_names)
             envs_only_gh = sorted(gh_env_names - bb_env_names)
 
-            has_diffs = bool(vars_only_bb or vars_only_gh or envs_only_bb or envs_only_gh)
-            status_icon = "➡️" if has_diffs else "✅"
-            console.print(f"\n{status_icon} {slug} ➡️ {gh_org}/{gh_name}")
-            if not has_diffs:
-                console.print("  ✅ Tudo sincronizado!")
-            for k in vars_only_bb:
-                console.print(f"  ➡️ {k:<28} ← só no BB")
-            for k in vars_only_gh:
-                console.print(f"  ❌ {k:<28} ← só no GH")
-            for e in envs_only_bb:
-                console.print(f"  ➡️ {e:<28} ← só no BB")
-            for e in envs_only_gh:
-                console.print(f"  ❌ {e:<28} ← só no GH")
+            bb_env_by_name = {e["name"]: e for e in bb_envs}
+            shared_envs = sorted(bb_env_names & gh_env_names)
+            env_var_diff_rows: list[tuple[str, str, str, str]] = []
+            for env_name in shared_envs:
+                bb_env = bb_env_by_name.get(env_name)
+                if not bb_env:
+                    continue
 
-    console.print(Panel.fit("[bold]RESUMO DO PLANO[/bold]", border_style="green"))
+                bb_env_items = detail.get("bb_env_vars", {}).get(bb_env["uuid"], [])
+                bb_plain_vars = {v["key"]: v.get("value", "") for v in bb_env_items if not v.get("secured")}
+                bb_secret_keys = {v["key"] for v in bb_env_items if v.get("secured")}
+
+                gh_env_vars = gh_get_environment_variables(gh_org, gh_name, env_name, gh_headers)
+                gh_env_secrets = gh_get_environment_secrets(gh_org, gh_name, env_name, gh_headers)
+
+                diff_lines: list[str] = []
+
+                bb_all_keys = set(bb_plain_vars) | bb_secret_keys
+                gh_all_env_keys = set(gh_env_vars) | set(gh_env_secrets)
+
+                for key in sorted(bb_all_keys - gh_all_env_keys):
+                    key_label = f"{key} [sensitive]" if key in bb_secret_keys else key
+                    action = "[yellow]action required[/yellow]" if key in bb_secret_keys else "copy to GH"
+                    diff_lines.append((env_name, key_label, "only in BB", action))
+                for key in sorted(gh_all_env_keys - bb_all_keys):
+                    key_label = f"{key} [sensitive]" if key in gh_env_secrets else key
+                    diff_lines.append((env_name, key_label, "only in GH", "[yellow]action required[/yellow]"))
+
+                for key in sorted(set(bb_plain_vars) & set(gh_env_vars)):
+                    if bb_plain_vars.get(key, "") != gh_env_vars.get(key, ""):
+                        diff_lines.append((env_name, key, "value differs", "copy to GH"))
+
+                if diff_lines:
+                    env_var_diff_rows.extend(diff_lines)
+
+            repo_var_diff_rows: list[tuple[str, str, str]] = []
+            for k in vars_only_bb:
+                key_label = f"{k} [sensitive]" if bb_var_secured.get(k, False) else k
+                action = "[yellow]action required[/yellow]" if bb_var_secured.get(k, False) else "copy to GH"
+                repo_var_diff_rows.append((key_label, "only in BB", action))
+            for k in vars_only_gh:
+                key_label = f"{k} [sensitive]" if k in gh_secrets else k
+                repo_var_diff_rows.append((key_label, "only in GH", "[yellow]action required[/yellow]"))
+
+            env_presence_diff_rows: list[tuple[str, str, str]] = []
+            for e in envs_only_bb:
+                env_presence_diff_rows.append((e, "only in BB", "copy to GH"))
+            for e in envs_only_gh:
+                env_presence_diff_rows.append((e, "only in GH", "[yellow]action required[/yellow]"))
+
+            has_diffs = bool(repo_var_diff_rows or env_presence_diff_rows or env_var_diff_rows)
+            status_icon = "➡️ " if has_diffs else "✅"
+            console.print(f"\n{status_icon} {slug} -> {gh_org}/{gh_name}")
+            if not has_diffs:
+                console.print("  ✅ Fully synchronized!")
+                continue
+
+            counts = Table(show_header=False, box=None, pad_edge=False)
+            counts.add_column("label", style="bold")
+            counts.add_column("value")
+            counts.add_row("Repo vars differences", str(len(repo_var_diff_rows)))
+            counts.add_row("Environment differences", str(len(env_presence_diff_rows)))
+            counts.add_row("Environment var differences", str(len(env_var_diff_rows)))
+            console.print(counts)
+
+            if repo_var_diff_rows:
+                repo_var_table = Table(title="Repo variables", box=None, pad_edge=False)
+                repo_var_table.add_column("Key", style="cyan", no_wrap=True)
+                repo_var_table.add_column("Difference", style="yellow")
+                repo_var_table.add_column("Action", style="bold")
+                for key, diff, action in repo_var_diff_rows:
+                    repo_var_table.add_row(Text(key), diff, action)
+                console.print(repo_var_table)
+
+            if env_presence_diff_rows:
+                env_presence_table = Table(title="Environments", box=None, pad_edge=False)
+                env_presence_table.add_column("Environment", style="cyan", no_wrap=True)
+                env_presence_table.add_column("Difference", style="yellow")
+                env_presence_table.add_column("Action", style="bold")
+                for env_name, diff, action in env_presence_diff_rows:
+                    env_presence_table.add_row(env_name, diff, action)
+                console.print(env_presence_table)
+
+            if env_var_diff_rows:
+                env_vars_table = Table(title="Environment variables", box=None, pad_edge=False)
+                env_vars_table.add_column("Environment", style="cyan", no_wrap=True)
+                env_vars_table.add_column("Key", style="magenta", no_wrap=True)
+                env_vars_table.add_column("Difference", style="yellow")
+                env_vars_table.add_column("Action", style="bold")
+                for env_name, key, diff, action in env_var_diff_rows:
+                    env_vars_table.add_row(env_name, Text(key), diff, action)
+                console.print(env_vars_table)
+
+    console.print(Panel.fit("[bold]PLAN SUMMARY[/bold]", border_style="green"))
     plan_table = Table(show_header=False, box=None, pad_edge=False)
     plan_table.add_column("label", style="bold")
     plan_table.add_column("value")
-    plan_table.add_row("Repos a criar no GitHub", str(len(only_bb)))
-    plan_table.add_row("Repos já em ambos", str(len(both)))
+    plan_table.add_row("Repos to create on GitHub", str(len(only_bb)))
+    plan_table.add_row("Repos already in both", str(len(both)))
     console.print(plan_table)
-    console.print()
-    console.print("Legenda:")
-    console.print("✅ sincronizado (nada a fazer)")
-    console.print("➡️  só no BB (copiar)")
-    console.print("❌ erro / diferença")
-    console.print("🔒 segredo: criar manualmente")
