@@ -12,7 +12,7 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
-from bb2gh.bb_api import consume_bb_pipeline_scope_warning, list_bb_repos
+from bb2gh.bb_api import consume_bb_pipeline_scope_warning, bb_get_repo, list_bb_repos
 from bb2gh.cli import filter_repos, parse_args
 from bb2gh.console import console, save_console_log
 from bb2gh.env import env, env_required
@@ -110,17 +110,35 @@ def _main_impl(args):
         console.print(" Force re-migration  : yes")
     console.print()
 
-    fetch_bb_label = f"Fetching Bitbucket repositories ({bb_workspace})"
-    log_copy_start(fetch_bb_label)
-    all_repos = list_bb_repos(bb_email, bb_api_token, bb_workspace)
-    log_copy_done(fetch_bb_label)
-    console.print(f"Found {len(all_repos)} repository(ies) on Bitbucket.\n")
+    # When --repos is given and no filters need the full list, fetch only those repos.
+    needs_full_list = args.list or args.exclude or args.pattern or args.only_private or args.only_public or args.project
+    if args.repos and not needs_full_list:
+        slugs = [s.strip() for s in args.repos.split(",")]
+        fetch_bb_label = f"Fetching {len(slugs)} Bitbucket repo(s)"
+        log_copy_start(fetch_bb_label)
+        all_repos = []
+        for slug in slugs:
+            repo = bb_get_repo(bb_email, bb_api_token, bb_workspace, slug)
+            if repo:
+                all_repos.append(repo)
+            else:
+                console.print(f"⚠ Repository not found on Bitbucket: {slug}")
+        log_copy_done(fetch_bb_label)
+        console.print(f"Found {len(all_repos)} repository(ies) on Bitbucket.\n")
+        repos = all_repos
+    else:
+        fetch_bb_label = f"Fetching Bitbucket repositories ({bb_workspace})"
+        log_copy_start(fetch_bb_label)
+        all_repos = list_bb_repos(bb_email, bb_api_token, bb_workspace)
+        log_copy_done(fetch_bb_label)
+        console.print(f"Found {len(all_repos)} repository(ies) on Bitbucket.\n")
 
-    if not all_repos:
-        console.print("No repositories found. Check credentials and workspace.")
-        return
+        if not all_repos:
+            console.print("No repositories found. Check credentials and workspace.")
+            return
 
-    repos = filter_repos(all_repos, args)
+        repos = filter_repos(all_repos, args)
+
     console.print(f"After filters: {len(repos)} repository(ies) selected.\n")
     console.print()
 

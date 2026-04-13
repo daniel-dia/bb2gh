@@ -61,6 +61,11 @@ def mirror_repo(
 
     push_label = f"Mirror push {repo_slug}"
     log_copy_start(push_label)
+    # Increase buffer to avoid HTTP 408 timeouts on large repos.
+    subprocess.run(
+        ["git", "config", "http.postBuffer", "524288000"],
+        capture_output=True, text=True, cwd=str(local_path),
+    )
     result = subprocess.run(["git", "push", "--mirror", gh_url], capture_output=True, text=True, cwd=str(local_path))
     if result.returncode != 0:
         log_copy_fail(push_label)

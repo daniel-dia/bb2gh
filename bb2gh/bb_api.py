@@ -24,32 +24,43 @@ def list_bb_repos(bb_email: str, bb_api_token: str, bb_workspace: str) -> list[d
         data = resp.json()
 
         for repo in data.get("values", []):
-            clone_url = None
-            for link in repo.get("links", {}).get("clone", []):
-                if link["name"] == "https":
-                    clone_url = link["href"]
-                    break
-
-            repos.append(
-                {
-                    "slug": repo["slug"],
-                    "name": repo.get("name", repo["slug"]),
-                    "description": repo.get("description", "") or "",
-                    "clone_url": clone_url,
-                    "is_private": repo.get("is_private", True),
-                    "language": repo.get("language", ""),
-                    "updated_on": repo.get("updated_on", ""),
-                    "project_key": repo.get("project", {}).get("key", ""),
-                    "project_name": repo.get("project", {}).get("name", ""),
-                    "default_branch": repo.get("mainbranch", {}).get("name", "") if repo.get("mainbranch") else "",
-                    "has_wiki": repo.get("has_wiki", False),
-                    "has_issues": repo.get("has_issues", False),
-                }
-            )
+            repos.append(_parse_repo(repo))
 
         url = data.get("next")
 
     return repos
+
+
+def _parse_repo(repo: dict) -> dict:
+    clone_url = None
+    for link in repo.get("links", {}).get("clone", []):
+        if link["name"] == "https":
+            clone_url = link["href"]
+            break
+
+    return {
+        "slug": repo["slug"],
+        "name": repo.get("name", repo["slug"]),
+        "description": repo.get("description", "") or "",
+        "clone_url": clone_url,
+        "is_private": repo.get("is_private", True),
+        "language": repo.get("language", ""),
+        "updated_on": repo.get("updated_on", ""),
+        "project_key": repo.get("project", {}).get("key", ""),
+        "project_name": repo.get("project", {}).get("name", ""),
+        "default_branch": repo.get("mainbranch", {}).get("name", "") if repo.get("mainbranch") else "",
+        "has_wiki": repo.get("has_wiki", False),
+        "has_issues": repo.get("has_issues", False),
+    }
+
+
+def bb_get_repo(bb_email: str, bb_api_token: str, bb_workspace: str, slug: str) -> dict | None:
+    url = f"{BB_API}/repositories/{bb_workspace}/{slug}"
+    resp = requests.get(url, auth=(bb_email, bb_api_token), timeout=30)
+    if resp.status_code == 404:
+        return None
+    resp.raise_for_status()
+    return _parse_repo(resp.json())
 
 
 def bb_get_pipeline_variables(bb_email: str, bb_api_token: str, workspace: str, slug: str) -> list[dict]:

@@ -37,7 +37,7 @@ Defina estas variáveis de ambiente **antes** de rodar o script:
 |---|---|---|
 | `BB_USERNAME` | Sim | Seu username do Bitbucket |
 | `BB_EMAIL` | Sim | Email da sua conta Atlassian (usado para autenticação na API) |
-| `BB_API_TOKEN` | Sim | [API Token](https://id.atlassian.com/manage-profile/security/api-tokens) com scopes `Repositories:Read` e `Pipelines:Read` |
+| `BB_API_TOKEN` | Sim | [API Token](https://id.atlassian.com/manage-profile/security/api-tokens) com scopes `read:repository:bitbucket` e `read:pipeline:bitbucket` |
 | `GH_TOKEN` | Sim | [Personal Access Token](https://github.com/settings/tokens) do GitHub com scope `repo` |
 | `GH_ORG` | Sim | Username ou organização de destino no GitHub |
 | `BB_WORKSPACE` | Não | Workspace do Bitbucket (padrão: mesmo que `BB_USERNAME`) |
