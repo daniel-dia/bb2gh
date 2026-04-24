@@ -11,6 +11,7 @@ Script Python para migrar repositórios de um workspace do Bitbucket para o GitH
 - Modo dry-run para ver o que seria feito sem executar
 - Detecta repos que já existem no GitHub e pula (ou força com `--force`)
 - Preserva **todos os branches, tags e histórico** (mirror push)
+- **Migra pull requests abertos** do Bitbucket para o GitHub
 - Salva um log/sumário da execução em arquivo (`logs/bb2gh_YYYYMMDD_HHMMSS.log`)
 
 ---
@@ -37,7 +38,7 @@ Defina estas variáveis de ambiente **antes** de rodar o script:
 |---|---|---|
 | `BB_USERNAME` | Sim | Seu username do Bitbucket |
 | `BB_EMAIL` | Sim | Email da sua conta Atlassian (usado para autenticação na API) |
-| `BB_API_TOKEN` | Sim | [API Token](https://id.atlassian.com/manage-profile/security/api-tokens) com scopes `read:repository:bitbucket` e `read:pipeline:bitbucket` |
+| `BB_API_TOKEN` | Sim | [API Token](https://id.atlassian.com/manage-profile/security/api-tokens) com scopes `read:repository:bitbucket`, `read:pipeline:bitbucket` e `read:pullrequest:bitbucket` |
 | `GH_TOKEN` | Sim | [Personal Access Token](https://github.com/settings/tokens) do GitHub com scope `repo` |
 | `GH_ORG` | Sim | Username ou organização de destino no GitHub |
 | `BB_WORKSPACE` | Não | Workspace do Bitbucket (padrão: mesmo que `BB_USERNAME`) |
@@ -48,8 +49,10 @@ No token do Bitbucket, use no minimo:
 
 - `Repositories:Read` (listar repositorios, clone mirror e deploy keys)
 - `Pipelines:Read` (listar pipeline variables e deployment environments)
+- `Pull requests:Read` (listar pull requests abertos para migração)
 
 Sem `Pipelines:Read`, o plano pode mostrar 0 environments/variables por falta de permissao (erro 403 na API).
+Sem `Pull requests:Read`, o script de migração de PRs não conseguirá listar os PRs (erro 403 na API).
 
 ### Exemplo (Linux/macOS)
 
@@ -169,6 +172,26 @@ python migrate.py --only-private --pattern "api-*" --public --dry-run
 python migrate.py --dry-run --log-file ./logs/minha-execucao.log
 ```
 
+### Migrar pull requests abertos do Bitbucket para o GitHub
+
+> **Pré-requisito:** o repo já deve ter sido migrado (mirror push) para que os branches existam no GitHub.
+
+```bash
+# Ver quais PRs seriam migrados (sem criar nada)
+python3 scripts/migrate_prs.py --repos meu-repo --dry-run
+
+# Migrar PRs abertos
+python3 scripts/migrate_prs.py --repos meu-repo
+
+# Vários repos de uma vez
+python3 scripts/migrate_prs.py --repos repo1,repo2,repo3
+
+# Com prefixo no nome do repo no GitHub
+python3 scripts/migrate_prs.py --repos meu-repo --gh-prefix bb-
+```
+
+Cada PR criado no GitHub inclui uma nota no body indicando o ID original e autor do Bitbucket. PRs duplicados (mesmo head/base) são detectados e pulados automaticamente.
+
 ---
 
 ## Referência de opções
@@ -224,7 +247,7 @@ Link direto:
 5. Clique em **Create API token with scopes**
 6. Dê um nome ao token e defina uma data de expiração, clique **Next**
 7. Selecione **Bitbucket** como app, clique **Next**
-8. Marque os scopes **Repositories:Read** e **Pipelines:Read**, clique **Next**
+8. Marque os scopes **Repositories:Read**, **Pipelines:Read** e **Pull requests:Read**, clique **Next**
 9. Revise e clique **Create token**
 10. Copie o token gerado → use como `BB_API_TOKEN`
 
@@ -246,6 +269,7 @@ Link direto:
 | `ERRO: variável de ambiente X não definida` | Exporte a variável faltante |
 | `401 Unauthorized` no Bitbucket | Verifique `BB_EMAIL` (email Atlassian, não username) e `BB_API_TOKEN` |
 | `403` ao ler variables/environments no Bitbucket | O token não tem `Pipelines:Read`; recrie o token com essa permissão |
+| `403` ao listar pull requests no Bitbucket | O token não tem `Pull requests:Read`; recrie o token com essa permissão |
 | `401/403` no GitHub | Verifique `GH_TOKEN` e se tem scope `repo` |
 | Repo já existe no GitHub | Use `--force` para forçar o push |
 | `git` não encontrado | Instale o git: `sudo apt install git` |

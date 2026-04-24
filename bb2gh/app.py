@@ -12,14 +12,21 @@ from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
 
-from bb2gh.bb_api import consume_bb_pipeline_scope_warning, bb_get_repo, list_bb_repos
+from bb2gh.bb_api import (
+    consume_bb_pipeline_scope_warning,
+    bb_get_repo,
+    bb_get_pull_requests,
+    bb_comment_pull_request,
+    bb_decline_pull_request,
+    list_bb_repos,
+)
 from bb2gh.cli import filter_repos, parse_args
 from bb2gh.console import console, save_console_log
 from bb2gh.env import env, env_required
-from bb2gh.gh_api import create_gh_repo, list_gh_repos
+from bb2gh.gh_api import create_gh_repo, gh_create_pull_request, list_gh_repos
 from bb2gh.plan import run_plan
 from bb2gh.progress import log_copy_done, log_copy_start
-from bb2gh.sync import mirror_repo, sync_repo_config_bb_to_gh
+from bb2gh.sync import mirror_repo, push_branch_bb_to_gh, sync_repo_config_bb_to_gh
 
 load_dotenv()
 
@@ -262,6 +269,91 @@ def _main_impl(args):
         success += 1
         console.print()
 
+    # --- PR migration ---
+    migrate_prs = args.migrate_prs or args.decline_prs
+    prs_created = 0
+    prs_skipped = 0
+    prs_failed = 0
+    prs_declined = 0
+
+    if migrate_prs and not _shutdown_requested:
+        console.print(Rule("Pull Request Migration", style="magenta"))
+        for repo in repos:
+            if _shutdown_requested:
+                break
+            slug = repo["slug"]
+            gh_name = args.gh_name if args.gh_name else f"{args.gh_prefix}{slug}"
+
+            try:
+                prs = bb_get_pull_requests(bb_email, bb_api_token, bb_workspace, slug)
+            except PermissionError as exc:
+                console.print(f"  ❌ {slug}: {exc}")
+                continue
+
+            if not prs:
+                continue
+
+            console.print(f"\n  [bold]{slug}[/bold]: {len(prs)} open PR(s)")
+
+            for pr in prs:
+                if _shutdown_requested:
+                    break
+                title = pr["title"]
+                src = pr["source_branch"]
+                dst = pr["destination_branch"]
+                author = pr["author"]
+                bb_id = pr["id"]
+
+                console.print(f"    PR #{bb_id}: {title}  ({src} -> {dst})")
+
+                # Push missing branches
+                for branch in (src, dst):
+                    import requests as _requests
+                    resp = _requests.get(
+                        f"https://api.github.com/repos/{gh_org}/{gh_name}/branches/{branch}",
+                        headers=gh_headers, timeout=15,
+                    )
+                    if resp.status_code != 200:
+                        console.print(f"      ↳ Pushing branch '{branch}'...")
+                        ok_b, err_b = push_branch_bb_to_gh(
+                            slug, branch, bb_username, bb_api_token,
+                            gh_token, gh_org, gh_name, bb_workspace,
+                        )
+                        if ok_b:
+                            console.print(f"      ↳ Branch '{branch}' pushed OK")
+                        else:
+                            console.print(f"      ✗ Failed to push '{branch}': {err_b}")
+
+                body = pr["description"]
+                if body:
+                    body += "\n\n---\n"
+                body += f"_Migrated from Bitbucket PR #{bb_id} (by {author})_"
+
+                ok, detail = gh_create_pull_request(
+                    gh_org, gh_name, title, body, src, dst, gh_headers,
+                )
+                if ok:
+                    console.print(f"      ✓ Created: {detail}")
+                    prs_created += 1
+                    if args.decline_prs:
+                        comment = f"This pull request has been moved to GitHub: {detail}"
+                        bb_comment_pull_request(bb_email, bb_api_token, bb_workspace, slug, bb_id, comment)
+                        declined, decline_err = bb_decline_pull_request(
+                            bb_email, bb_api_token, bb_workspace, slug, bb_id,
+                        )
+                        if declined:
+                            console.print(f"      ✓ Declined on Bitbucket")
+                            prs_declined += 1
+                        else:
+                            console.print(f"      ⚠ Failed to decline: {decline_err}")
+                else:
+                    if "already exists" in detail.lower():
+                        console.print(f"      ➡️  PR already exists on GitHub")
+                        prs_skipped += 1
+                    else:
+                        console.print(f"      ✗ Failed: {detail}")
+                        prs_failed += 1
+
     shutil.rmtree(work_dir, ignore_errors=True)
     _current_work_dir = None
 
@@ -271,6 +363,15 @@ def _main_impl(args):
     console.print(f"Skipped : {skipped} (already synchronized)")
     console.print(f"Failed  : {failed}")
     console.print(f"Total   : {len(repos)}")
+
+    if migrate_prs:
+        console.print()
+        console.print(Panel.fit("[bold]Pull Requests[/bold]", border_style="magenta"))
+        console.print(f"PRs created  : {prs_created}")
+        console.print(f"PRs skipped  : {prs_skipped} (already exist)")
+        console.print(f"PRs failed   : {prs_failed}")
+        if args.decline_prs:
+            console.print(f"PRs declined : {prs_declined}")
 
     if manual_tasks_all:
         console.print()

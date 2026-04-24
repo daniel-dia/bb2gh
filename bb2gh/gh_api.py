@@ -61,6 +61,8 @@ def create_gh_repo(name: str, description: str, private: bool, gh_headers: dict)
     user = gh_authenticated_user(gh_headers)
     endpoint = f"{GH_API}/user/repos" if user == gh_org else f"{GH_API}/orgs/{gh_org}/repos"
 
+    if len(description) > 350:
+        description = description[:347] + "..."
     payload = {"name": name, "description": description, "private": private}
     resp = requests.post(endpoint, headers=gh_headers, json=payload, timeout=30)
     if resp.status_code in (200, 201):
@@ -153,6 +155,38 @@ def gh_get_environment_secrets(gh_org: str, repo: str, env_name: str, gh_headers
         return secrets
     except requests.RequestException:
         return set()
+
+
+def gh_create_pull_request(
+    gh_org: str,
+    repo: str,
+    title: str,
+    body: str,
+    head: str,
+    base: str,
+    gh_headers: dict,
+) -> tuple[bool, str]:
+    try:
+        payload = {"title": title, "body": body, "head": head, "base": base}
+        resp = requests.post(
+            f"{GH_API}/repos/{gh_org}/{repo}/pulls",
+            headers=gh_headers,
+            json=payload,
+            timeout=30,
+        )
+        if resp.status_code in (200, 201):
+            pr_url = resp.json().get("html_url", "")
+            return True, pr_url
+        try:
+            data = resp.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            return False, f"{resp.status_code} — {resp.text[:200]}"
+        errors = data.get("errors", [])
+        if errors and any("pull request already exists" in (e.get("message", "") or "").lower() for e in errors):
+            return False, "PR already exists"
+        return False, f"{resp.status_code} — {resp.text[:200]}"
+    except requests.RequestException as exc:
+        return False, str(exc)
 
 
 def gh_ensure_environment(gh_org: str, repo: str, env_name: str, gh_headers: dict) -> bool:

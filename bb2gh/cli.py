@@ -41,6 +41,8 @@ Optional environment variables:
     behav.add_argument("--plan", action="store_true", help="Show detailed plan: compare BB vs GH, list vars, secrets, envs, deploy keys")
     behav.add_argument("--force", "-f", action="store_true", help="Force migration even if repo already exists on GitHub (push --mirror)")
     behav.add_argument("--list", "-l", action="store_true", help="List all Bitbucket repos and exit")
+    behav.add_argument("--migrate-prs", action="store_true", default=True, help="Migrate open PRs from Bitbucket to GitHub (pushes missing branches automatically)")
+    behav.add_argument("--decline-prs", action="store_true", default=True, help="Decline migrated PRs on Bitbucket with a link to the new GitHub PR (implies --migrate-prs)")
     behav.add_argument(
         "--log-file",
         help="Path to save run log/summary (default: logs/bb2gh_YYYYMMDD_HHMMSS.log)",

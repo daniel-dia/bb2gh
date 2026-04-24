@@ -145,6 +145,59 @@ def bb_get_env_variables(bb_email: str, bb_api_token: str, workspace: str, slug:
     return variables
 
 
+def bb_get_pull_requests(bb_email: str, bb_api_token: str, workspace: str, slug: str, state: str = "OPEN") -> list[dict]:
+    url = f"{BB_API}/repositories/{workspace}/{slug}/pullrequests?state={state}&pagelen=50"
+    prs: list[dict] = []
+    while url:
+        try:
+            resp = requests.get(url, auth=(bb_email, bb_api_token), timeout=30)
+            if resp.status_code == 404:
+                return []
+            if resp.status_code == 403:
+                raise PermissionError(
+                    "BB token missing scope 'read:pullrequest:bitbucket'. "
+                    "Add 'Pull requests: Read' to the App Password."
+                )
+            resp.raise_for_status()
+            data = resp.json()
+            for pr in data.get("values", []):
+                prs.append({
+                    "id": pr.get("id"),
+                    "title": pr.get("title", ""),
+                    "description": pr.get("description", "") or "",
+                    "state": pr.get("state", ""),
+                    "source_branch": pr.get("source", {}).get("branch", {}).get("name", ""),
+                    "destination_branch": pr.get("destination", {}).get("branch", {}).get("name", ""),
+                    "author": pr.get("author", {}).get("display_name", ""),
+                    "created_on": pr.get("created_on", ""),
+                    "updated_on": pr.get("updated_on", ""),
+                })
+            url = data.get("next")
+        except requests.RequestException:
+            return prs
+    return prs
+
+
+def bb_comment_pull_request(
+    bb_email: str, bb_api_token: str, workspace: str, slug: str, pr_id: int, message: str,
+) -> bool:
+    url = f"{BB_API}/repositories/{workspace}/{slug}/pullrequests/{pr_id}/comments"
+    resp = requests.post(
+        url, auth=(bb_email, bb_api_token), json={"content": {"raw": message}}, timeout=15,
+    )
+    return resp.status_code in (200, 201)
+
+
+def bb_decline_pull_request(
+    bb_email: str, bb_api_token: str, workspace: str, slug: str, pr_id: int,
+) -> tuple[bool, str]:
+    url = f"{BB_API}/repositories/{workspace}/{slug}/pullrequests/{pr_id}/decline"
+    resp = requests.post(url, auth=(bb_email, bb_api_token), timeout=15)
+    if resp.status_code in (200, 201):
+        return True, ""
+    return False, f"{resp.status_code} — {resp.text[:200]}"
+
+
 def bb_get_deploy_keys(bb_email: str, bb_api_token: str, workspace: str, slug: str) -> list[dict]:
     url = f"{BB_API}/repositories/{workspace}/{slug}/deploy-keys?pagelen=100"
     keys = []

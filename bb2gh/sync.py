@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -74,6 +75,43 @@ def mirror_repo(
 
     shutil.rmtree(local_path, ignore_errors=True)
     return True, ""
+
+
+def push_branch_bb_to_gh(
+    slug: str,
+    branch: str,
+    bb_username: str,
+    bb_api_token: str,
+    gh_token: str,
+    gh_org: str,
+    gh_repo: str,
+    bb_workspace: str,
+) -> tuple[bool, str]:
+    """Clone a single branch from BB and push it to GH."""
+    work_dir = Path(tempfile.mkdtemp(prefix="bb2gh_branch_"))
+    local_path = work_dir / slug
+    bb_url = _with_basic_auth(
+        f"https://bitbucket.org/{bb_workspace}/{slug}.git", bb_username, bb_api_token,
+    )
+    gh_url = _with_basic_auth(
+        f"https://github.com/{gh_org}/{gh_repo}.git", "x-access-token", gh_token,
+    )
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--single-branch", "--branch", branch, bb_url, str(local_path)],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return False, f"clone failed: {result.stderr[:200]}"
+        result = subprocess.run(
+            ["git", "push", gh_url, f"{branch}:{branch}"],
+            capture_output=True, text=True, cwd=str(local_path),
+        )
+        if result.returncode != 0:
+            return False, f"push failed: {result.stderr[:200]}"
+        return True, ""
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def sync_repo_config_bb_to_gh(
